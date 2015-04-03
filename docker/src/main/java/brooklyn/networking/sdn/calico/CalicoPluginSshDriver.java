@@ -5,6 +5,7 @@ package brooklyn.networking.sdn.calico;
 
 import java.net.InetAddress;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,15 +16,16 @@ import brooklyn.entity.basic.AbstractSoftwareProcessSshDriver;
 import brooklyn.entity.basic.Attributes;
 import brooklyn.entity.basic.Entities;
 import brooklyn.entity.basic.EntityLocal;
+import brooklyn.entity.nosql.etcd.EtcdNode;
 import brooklyn.location.basic.SshMachineLocation;
 import brooklyn.networking.sdn.SdnAgent;
 import brooklyn.util.collections.MutableMap;
 import brooklyn.util.net.Cidr;
 import brooklyn.util.os.Os;
 import brooklyn.util.ssh.BashCommands;
-import brooklyn.util.task.Tasks;
 
 import com.google.common.collect.Lists;
+import com.google.common.net.HostAndPort;
 
 public class CalicoPluginSshDriver extends AbstractSoftwareProcessSshDriver implements CalicoPluginDriver {
 
@@ -51,6 +53,7 @@ public class CalicoPluginSshDriver extends AbstractSoftwareProcessSshDriver impl
         List<String> commands = Lists.newLinkedList();
         commands.addAll(BashCommands.commandsToDownloadUrlsAs(resolver.getTargets(), getCalicoCommand()));
         commands.add("chmod 755 " + getCalicoCommand());
+        commands.add(BashCommands.installPackage("ipset"));
 
         newScript(INSTALLING)
                 .body.append(commands)
@@ -66,53 +69,56 @@ public class CalicoPluginSshDriver extends AbstractSoftwareProcessSshDriver impl
     public void launch() {
         InetAddress address = getEntity().getAttribute(CalicoPlugin.SDN_AGENT_ADDRESS);
         Boolean firstMember = getEntity().getAttribute(AbstractGroup.FIRST_MEMBER);
-        Entity first = getEntity().getAttribute(AbstractGroup.FIRST);
         LOG.info("Launching {} calico service at {}", Boolean.TRUE.equals(firstMember) ? "first" : "next", address.getHostAddress());
 
         newScript(MutableMap.of(USE_PID_FILE, false), LAUNCHING)
                 .updateTaskAndFailOnNonZeroResultCode()
-                .body.append(BashCommands.sudo(String.format("%s launch %s", getCalicoCommand(),
-                        Boolean.TRUE.equals(firstMember) ? "" : first.getAttribute(Attributes.SUBNET_ADDRESS))))
+                .body.append(BashCommands.sudo(String.format("%s node --ip=%s", getCalicoCommand(), address.getHostAddress())))
                 .execute();
     }
 
     @Override
     public boolean isRunning() {
-        // Spawns a container for duration of command, so take the host lock
-        getEntity().getAttribute(SdnAgent.DOCKER_HOST).getDynamicLocation().getLock().lock();
-        try {
-            return newScript(MutableMap.of(USE_PID_FILE, false), CHECK_RUNNING)
-                    .body.append(BashCommands.sudo(getCalicoCommand() + " status"))
-                    .execute() == 0;
-        } finally {
-            getEntity().getAttribute(SdnAgent.DOCKER_HOST).getDynamicLocation().getLock().unlock();
-        }
+        return newScript(MutableMap.of(USE_PID_FILE, false), CHECK_RUNNING)
+                .body.append(BashCommands.sudo(String.format("%s status", getCalicoCommand())))
+                .execute() == 0;
     }
 
     @Override
     public void stop() {
         newScript(MutableMap.of(USE_PID_FILE, false), STOPPING)
-                .body.append(BashCommands.sudo(getCalicoCommand() + " stop"))
+                .body.append(BashCommands.sudo(getCalicoCommand() + " node stop --force"))
                 .execute();
     }
 
     @Override
     public void createSubnet(String subnetId, String subnetName, Cidr subnetCidr) {
-        LOG.debug("Nothing to do for subnet creation");
+        // curl -L -X PUT http://127.0.0.1:4001/v2/keys/calico/network/group/$web_group/name -d value="Group1"
+        newScript("createSubnet")
+                .body.append(
+                        BashCommands.sudo(String.format("%s group add %s", getCalicoCommand(), subnetId)),
+                        BashCommands.sudo(String.format("%s ipv4 pool add %s", getCalicoCommand(), subnetCidr)))
+                .execute();
     }
 
     @Override
     public InetAddress attachNetwork(String containerId, String subnetId) {
-        Tasks.setBlockingDetails(String.format("Attach %s to %s", containerId, subnetId));
-        try {
-            Cidr cidr = getEntity().getAttribute(SdnAgent.SDN_PROVIDER).getSubnetCidr(subnetId);
-            InetAddress address = getEntity().getAttribute(SdnAgent.SDN_PROVIDER).getNextContainerAddress(subnetId);
-            ((CalicoPlugin) getEntity()).getDockerHost().execCommand(BashCommands.sudo(String.format("%s attach %s/%d %s",
-                    getCalicoCommand(), address.getHostAddress(), cidr.getLength(), containerId)));
-            return address;
-        } finally {
-            Tasks.resetBlockingDetails();
-        }
+        InetAddress address = getEntity().getAttribute(SdnAgent.SDN_PROVIDER).getNextContainerAddress(subnetId);
+        newScript("attachNetwork")
+                .body.append(
+                        BashCommands.sudo(String.format("%s group addmember %s %s", getCalicoCommand(), subnetId, containerId)),
+                        BashCommands.sudo(String.format("%s container add %s %s", getCalicoCommand(), containerId, address.getHostAddress())))
+                .execute();
+        return address;
+    }
+
+    @Override
+    public Map<String, String> getShellEnvironment() {
+        Entity etcdNode = getEntity().config().get(CalicoPlugin.ETCD_NODE);
+        HostAndPort etcdAuthority = HostAndPort.fromParts(etcdNode.getAttribute(Attributes.ADDRESS), etcdNode.getAttribute(EtcdNode.ETCD_CLIENT_PORT));
+        Map<String, String> environment = MutableMap.copyOf(super.getShellEnvironment());
+        environment.put("ETCD_AUTHORITY", etcdAuthority.toString());
+        return environment;
     }
 
 }

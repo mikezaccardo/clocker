@@ -36,6 +36,7 @@ import brooklyn.networking.sdn.SdnProvider;
 import brooklyn.networking.sdn.SdnProviderImpl;
 import brooklyn.util.collections.MutableList;
 import brooklyn.util.collections.QuorumCheck.QuorumChecks;
+import brooklyn.util.net.Cidr;
 import brooklyn.util.text.Strings;
 
 import com.google.common.collect.ImmutableList;
@@ -60,6 +61,8 @@ public class CalicoNetworkImpl extends SdnProviderImpl implements CalicoNetwork 
         EtcdCluster etcd = addChild(EntitySpec.create(EtcdCluster.class)
                 .configure(Cluster.INITIAL_SIZE, 0)
                 .configure(EtcdCluster.ETCD_NODE_SPEC, etcdNodeSpec)
+                .configure(EtcdCluster.CLUSTER_NAME, "calico")
+                .configure(EtcdCluster.CLUSTER_TOKEN, "etcd-calico")
                 .configure(DynamicCluster.QUARANTINE_FAILED_ENTITIES, true)
                 .configure(DynamicCluster.RUNNING_QUORUM_CHECK, QuorumChecks.atLeastOneUnlessEmpty())
                 .configure(DynamicCluster.UP_QUORUM_CHECK, QuorumChecks.atLeastOneUnlessEmpty())
@@ -73,11 +76,14 @@ public class CalicoNetworkImpl extends SdnProviderImpl implements CalicoNetwork 
 
         EntitySpec<?> agentSpec = EntitySpec.create(getConfig(SdnProvider.SDN_AGENT_SPEC, EntitySpec.create(CalicoPlugin.class)))
                 .configure(CalicoPlugin.SDN_PROVIDER, this);
-        String calicoVersion = getConfig(CALICO_VERSION);
+        String calicoVersion = config().get(CALICO_VERSION);
         if (Strings.isNonBlank(calicoVersion)) {
             agentSpec.configure(SoftwareProcess.SUGGESTED_VERSION, calicoVersion);
         }
         setAttribute(SdnProvider.SDN_AGENT_SPEC, agentSpec);
+
+        Cidr calicoCidr = getNextSubnetCidr();
+        config().set(AGENT_CIDR, calicoCidr);
     }
 
     @Override
