@@ -27,11 +27,11 @@ import brooklyn.util.ssh.BashCommands;
 import com.google.common.collect.Lists;
 import com.google.common.net.HostAndPort;
 
-public class CalicoPluginSshDriver extends AbstractSoftwareProcessSshDriver implements CalicoPluginDriver {
+public class CalicoNodeSshDriver extends AbstractSoftwareProcessSshDriver implements CalicoNodeDriver {
 
-    private static final Logger LOG = LoggerFactory.getLogger(CalicoPlugin.class);
+    private static final Logger LOG = LoggerFactory.getLogger(CalicoNode.class);
 
-    public CalicoPluginSshDriver(EntityLocal entity, SshMachineLocation machine) {
+    public CalicoNodeSshDriver(EntityLocal entity, SshMachineLocation machine) {
         super(entity, machine);
     }
 
@@ -67,7 +67,7 @@ public class CalicoPluginSshDriver extends AbstractSoftwareProcessSshDriver impl
 
     @Override
     public void launch() {
-        InetAddress address = getEntity().getAttribute(CalicoPlugin.SDN_AGENT_ADDRESS);
+        InetAddress address = getEntity().getAttribute(CalicoNode.SDN_AGENT_ADDRESS);
         Boolean firstMember = getEntity().getAttribute(AbstractGroup.FIRST_MEMBER);
         LOG.info("Launching {} calico service at {}", Boolean.TRUE.equals(firstMember) ? "first" : "next", address.getHostAddress());
 
@@ -93,7 +93,6 @@ public class CalicoPluginSshDriver extends AbstractSoftwareProcessSshDriver impl
 
     @Override
     public void createSubnet(String subnetId, String subnetName, Cidr subnetCidr) {
-        // curl -L -X PUT http://127.0.0.1:4001/v2/keys/calico/network/group/$web_group/name -d value="Group1"
         newScript("createSubnet")
                 .body.append(
                         BashCommands.sudo(String.format("%s group add %s", getCalicoCommand(), subnetId)),
@@ -114,7 +113,7 @@ public class CalicoPluginSshDriver extends AbstractSoftwareProcessSshDriver impl
 
     @Override
     public Map<String, String> getShellEnvironment() {
-        Entity etcdNode = getEntity().config().get(CalicoPlugin.ETCD_NODE);
+        Entity etcdNode = getEntity().config().get(CalicoNode.ETCD_NODE);
         HostAndPort etcdAuthority = HostAndPort.fromParts(etcdNode.getAttribute(Attributes.ADDRESS), etcdNode.getAttribute(EtcdNode.ETCD_CLIENT_PORT));
         Map<String, String> environment = MutableMap.copyOf(super.getShellEnvironment());
         environment.put("ETCD_AUTHORITY", etcdAuthority.toString());

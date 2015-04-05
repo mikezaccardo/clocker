@@ -15,12 +15,17 @@
  */
 package brooklyn.networking.sdn.calico;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.Collection;
+import java.util.Map;
 
 import org.jclouds.net.domain.IpPermission;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import brooklyn.entity.Entity;
+import brooklyn.entity.basic.Attributes;
 import brooklyn.entity.basic.Entities;
 import brooklyn.entity.basic.SoftwareProcess;
 import brooklyn.entity.container.docker.DockerHost;
@@ -36,6 +41,7 @@ import brooklyn.networking.sdn.SdnProvider;
 import brooklyn.networking.sdn.SdnProviderImpl;
 import brooklyn.util.collections.MutableList;
 import brooklyn.util.collections.QuorumCheck.QuorumChecks;
+import brooklyn.util.exceptions.Exceptions;
 import brooklyn.util.net.Cidr;
 import brooklyn.util.text.Strings;
 
@@ -74,16 +80,13 @@ public class CalicoNetworkImpl extends SdnProviderImpl implements CalicoNetwork 
 
         setAttribute(ETCD_CLUSTER, etcd);
 
-        EntitySpec<?> agentSpec = EntitySpec.create(getConfig(SdnProvider.SDN_AGENT_SPEC, EntitySpec.create(CalicoPlugin.class)))
-                .configure(CalicoPlugin.SDN_PROVIDER, this);
+        EntitySpec<?> agentSpec = EntitySpec.create(getConfig(SdnProvider.SDN_AGENT_SPEC, EntitySpec.create(CalicoNode.class)))
+                .configure(CalicoNode.SDN_PROVIDER, this);
         String calicoVersion = config().get(CALICO_VERSION);
         if (Strings.isNonBlank(calicoVersion)) {
             agentSpec.configure(SoftwareProcess.SUGGESTED_VERSION, calicoVersion);
         }
         setAttribute(SdnProvider.SDN_AGENT_SPEC, agentSpec);
-
-        Cidr calicoCidr = getNextSubnetCidr();
-        config().set(AGENT_CIDR, calicoCidr);
     }
 
     @Override
@@ -93,9 +96,14 @@ public class CalicoNetworkImpl extends SdnProviderImpl implements CalicoNetwork 
     }
 
     @Override
-    public void start(Collection<? extends Location> locations) {
-
-        super.start(locations);
+    public InetAddress getNextAgentAddress(String agentId) {
+        Entity agent = getManagementContext().getEntityManager().getEntity(agentId);
+        String address = agent.getAttribute(CalicoNode.DOCKER_HOST).getAttribute(Attributes.ADDRESS);
+        try {
+            return InetAddress.getByName(address);
+        } catch (UnknownHostException uhe) {
+            throw Exceptions.propagate(uhe);
+        }
     }
 
     @Override
@@ -113,9 +121,9 @@ public class CalicoNetworkImpl extends SdnProviderImpl implements CalicoNetwork 
         node.start(ImmutableList.of(machine));
 
         EntitySpec<?> spec = EntitySpec.create(getAttribute(SDN_AGENT_SPEC))
-                .configure(CalicoPlugin.DOCKER_HOST, host)
-                .configure(CalicoPlugin.ETCD_NODE, node);
-        CalicoPlugin agent = (CalicoPlugin) getAgents().addChild(spec);
+                .configure(CalicoNode.DOCKER_HOST, host)
+                .configure(CalicoNode.ETCD_NODE, node);
+        CalicoNode agent = (CalicoNode) getAgents().addChild(spec);
         Entities.manage(agent);
         getAgents().addMember(agent);
         agent.start(ImmutableList.of(machine));
@@ -131,7 +139,7 @@ public class CalicoNetworkImpl extends SdnProviderImpl implements CalicoNetwork 
         }
 
         EtcdCluster etcd = getAttribute(ETCD_CLUSTER);
-        EtcdNode node = agent.getAttribute(CalicoPlugin.ETCD_NODE);
+        EtcdNode node = agent.getAttribute(CalicoNode.ETCD_NODE);
         etcd.removeMember(node);
         node.stop();
 
