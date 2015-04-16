@@ -67,13 +67,13 @@ public class CalicoNodeSshDriver extends AbstractSoftwareProcessSshDriver implem
 
     @Override
     public void launch() {
-        InetAddress address = getEntity().getAttribute(CalicoNode.SDN_AGENT_ADDRESS);
+        String address = getEntity().getAttribute(CalicoNode.DOCKER_HOST).getAttribute(Attributes.ADDRESS);
         Boolean firstMember = getEntity().getAttribute(AbstractGroup.FIRST_MEMBER);
-        LOG.info("Launching {} calico service at {}", Boolean.TRUE.equals(firstMember) ? "first" : "next", address.getHostAddress());
+        LOG.info("Launching {} calico service at {}", Boolean.TRUE.equals(firstMember) ? "first" : "next", address);
 
         newScript(MutableMap.of(USE_PID_FILE, false), LAUNCHING)
                 .updateTaskAndFailOnNonZeroResultCode()
-                .body.append(BashCommands.sudo(String.format("%s node --ip=%s", getCalicoCommand(), address.getHostAddress())))
+                .body.append(BashCommands.sudo(String.format("%s node --ip=%s", getCalicoCommand(), address)))
                 .execute();
     }
 
@@ -95,7 +95,7 @@ public class CalicoNodeSshDriver extends AbstractSoftwareProcessSshDriver implem
     public void createSubnet(String subnetId, String subnetName, Cidr subnetCidr) {
         newScript("createSubnet")
                 .body.append(
-                        BashCommands.sudo(String.format("%s group add %s", getCalicoCommand(), subnetId)),
+                        BashCommands.sudo(String.format("%s profile add %s", getCalicoCommand(), subnetId)),
                         BashCommands.sudo(String.format("%s ipv4 pool add %s", getCalicoCommand(), subnetCidr)))
                 .execute();
     }
@@ -105,7 +105,7 @@ public class CalicoNodeSshDriver extends AbstractSoftwareProcessSshDriver implem
         InetAddress address = getEntity().getAttribute(SdnAgent.SDN_PROVIDER).getNextContainerAddress(subnetId);
         newScript("attachNetwork")
                 .body.append(
-                        BashCommands.sudo(String.format("%s group addmember %s %s", getCalicoCommand(), subnetId, containerId)),
+                        BashCommands.sudo(String.format("%s profile %s member add %s", getCalicoCommand(), subnetId, containerId)),
                         BashCommands.sudo(String.format("%s container add %s %s", getCalicoCommand(), containerId, address.getHostAddress())))
                 .execute();
         return address;
